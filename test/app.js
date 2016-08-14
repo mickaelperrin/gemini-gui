@@ -4,19 +4,22 @@ const _ = require('lodash');
 const proxyquire = require('proxyquire');
 const q = require('q');
 const fs = require('q-io/fs');
+const optipng = require('optipng-bin');
 
 const RunnerFactory = require('../lib/runner');
 const AllSuitesRunner = require('../lib/runner/all-suites-runner');
 const mkDummyCollection = require('./utils').mkDummyCollection;
-
-let App;
 
 describe('App', () => {
     const sandbox = sinon.sandbox.create();
 
     let suiteCollection;
     let Gemini;
+    let App;
     let app;
+
+    let execFile;
+    let compareSize;
 
     const stubFs_ = () => {
         sandbox.stub(fs, 'exists').returns(q(false));
@@ -24,6 +27,33 @@ describe('App', () => {
         sandbox.stub(fs, 'makeDirectory').returns(q());
         sandbox.stub(fs, 'makeTree').returns(q());
         sandbox.stub(fs, 'copy').returns(q());
+    };
+
+    const mkDummyTest_ = (params) => {
+        return _.defaults(params || {}, {
+            suite: {path: 'default_suite_path'},
+            state: 'default_state',
+            browserId: 'default_browser',
+            referencePath: 'default_reference_path',
+            currentPath: 'default_current_path'
+        });
+    };
+
+    const mkCompressionRes = (params) => {
+        params = _.defaults(params || {}, {
+            currentPath: 'default_current_path',
+            referencePath: 'default_reference_path',
+            currentSize: 1000,
+            referenceSize: 750
+        });
+
+        const difference = params.currentSize - params.referenceSize;
+        const sizes = [params.currentSize, params.referenceSize, difference];
+
+        return [params.currentPath, params.referencePath, 'difference'].reduce((compression, key, i) => {
+            compression[key] = sizes[i];
+            return compression;
+        }, {});
     };
 
     const mkApp_ = (config) => new App(config || {});
@@ -36,8 +66,14 @@ describe('App', () => {
         Gemini.prototype.readTests = sandbox.stub().returns(q(suiteCollection));
         Gemini.prototype.test = sandbox.stub().returns(q());
 
+        compareSize = sandbox.stub();
+        compareSize.returns(q(mkCompressionRes()));
+        execFile = sandbox.stub().yields(null);
+
         App = proxyquire('../lib/app', {
-            './find-gemini': sandbox.stub().returns(Gemini)
+            './find-gemini': sandbox.stub().returns(Gemini),
+            'compare-size': compareSize,
+            'child_process': {execFile}
         });
 
         app = mkApp_();
@@ -148,16 +184,6 @@ describe('App', () => {
     });
 
     describe('updateReferenceImage', () => {
-        const mkDummyTest_ = (params) => {
-            return _.defaults(params || {}, {
-                suite: {path: 'default_suite_path'},
-                state: 'default_state',
-                browserId: 'default_browser',
-                referencePath: 'default_reference_path',
-                currentPath: 'default_current_path'
-            });
-        };
-
         beforeEach(() => {
             stubFs_();
             sandbox.stub(app, 'refPathToURL');
@@ -170,24 +196,15 @@ describe('App', () => {
         });
 
         it('should create directory tree for reference image before saving', () => {
-            const test = mkDummyTest_({referencePath: 'path/to/reference/image.png'});
+            const referencePath = 'path/to/reference/image.png';
+            const test = mkDummyTest_({referencePath});
+
+            compareSize.returns(q(mkCompressionRes({referencePath})));
 
             app.addFailedTest(test);
 
             return app.updateReferenceImage(test)
                 .then(() => assert.calledWith(fs.makeTree, 'path/to/reference'));
-        });
-
-        it('should copy current image to reference folder', () => {
-            const referencePath = 'path/to/reference/image.png';
-            const currentPath = 'path/to/current/image.png';
-
-            const test = mkDummyTest_({referencePath, currentPath});
-
-            app.addFailedTest(test);
-
-            return app.updateReferenceImage(test)
-                .then(() => assert.calledWith(fs.copy, currentPath, referencePath));
         });
 
         it('should be resolved with URL to updated reference', () => {
@@ -198,6 +215,69 @@ describe('App', () => {
 
             return app.updateReferenceImage(test)
                 .then((result) => assert.equal(result, 'http://dummy_ref.url'));
+        });
+    });
+
+    describe('compress and copy reference image', () => {
+        beforeEach(() => sandbox.stub(app, 'refPathToURL'));
+
+        it('should call execFile with optipng and pathes to ref and curr img', () => {
+            const referencePath = 'path/to/reference/image.png';
+            const currentPath = 'path/to/current/image.png';
+
+            const test = mkDummyTest_({referencePath, currentPath});
+
+            compareSize.returns(q(mkCompressionRes({referencePath, currentPath})));
+
+            app.addFailedTest(test);
+
+            return app.updateReferenceImage(test)
+                .then(() => assert.calledWith(execFile, optipng,
+                    ['-out', referencePath, currentPath]));
+        });
+    });
+
+    describe('calculate compression size', () => {
+        beforeEach(() => sandbox.stub(app, 'refPathToURL'));
+
+        it('should call compareSize with ref and curr images', () => {
+            const currentPath = 'path/to/current/image.png';
+            const referencePath = 'path/to/reference/image.png';
+
+            const test = mkDummyTest_({referencePath, currentPath});
+
+            compareSize.returns(q(mkCompressionRes({referencePath, currentPath})));
+
+            app.addFailedTest(test);
+
+            return app.updateReferenceImage(test)
+                .then(() => assert.calledWithExactly(
+                    compareSize, test.referencePath, test.currentPath
+                ));
+        });
+
+        it('should log size on which the ref image has been compressed (in percents)', () => {
+            sandbox.spy(console, 'log');
+
+            const currentPath = 'path/to/current/image.png';
+            const referencePath = 'path/to/reference/image.png';
+
+            const currentSize = 30000;
+            const referenceSize = 15000;
+            const diffInPercent = Math.round(referenceSize * 100 / currentSize);
+
+            const test = mkDummyTest_({referencePath, currentPath});
+
+            compareSize.returns(q(mkCompressionRes({
+                referencePath, currentPath, currentSize, referenceSize
+            })));
+
+            app.addFailedTest(test);
+
+            return app.updateReferenceImage(test)
+                .then(() => assert.calledWithExactly(
+                    console.log, sinon.match.string, test.referencePath, diffInPercent
+                ));
         });
     });
 
