@@ -34,15 +34,15 @@ describe('App', () => {
             suite: {path: 'default_suite_path'},
             state: 'default_state',
             browserId: 'default_browser',
-            referencePath: 'default_reference_path',
-            currentPath: 'default_current_path'
+            referencePath: 'default/reference/path',
+            currentPath: 'default/current/path'
         });
     };
 
     const mkCompressionRes = (params) => {
         params = _.defaults(params || {}, {
-            currentPath: 'default_current_path',
-            referencePath: 'default_reference_path',
+            currentPath: 'default/current/path',
+            referencePath: 'default/reference/path',
             currentSize: 1000,
             referenceSize: 750
         });
@@ -243,7 +243,6 @@ describe('App', () => {
         it('should call compareSize with ref and curr images', () => {
             const currentPath = 'path/to/current/image.png';
             const referencePath = 'path/to/reference/image.png';
-
             const test = mkDummyTest_({referencePath, currentPath});
 
             compareSize.returns(q(mkCompressionRes({referencePath, currentPath})));
