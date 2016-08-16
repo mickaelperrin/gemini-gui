@@ -43,8 +43,8 @@ describe('App', () => {
         params = _.defaults(params || {}, {
             currentPath: 'default/current/path',
             referencePath: 'default/reference/path',
-            currentSize: 1000,
-            referenceSize: 750
+            currentSize: 500100,
+            referenceSize: 100500
         });
 
         const difference = params.currentSize - params.referenceSize;
@@ -261,22 +261,17 @@ describe('App', () => {
             const currentPath = 'path/to/current/image.png';
             const referencePath = 'path/to/reference/image.png';
 
-            const currentSize = 30000;
-            const referenceSize = 15000;
-            const diffInPercent = Math.round(referenceSize * 100 / currentSize);
-
             const test = mkDummyTest_({referencePath, currentPath});
 
             compareSize.returns(q(mkCompressionRes({
-                referencePath, currentPath, currentSize, referenceSize
+                referencePath, currentPath, currentSize: 2000, referenceSize: 1000
             })));
 
             app.addFailedTest(test);
 
             return app.updateReferenceImage(test)
-                .then(() => assert.calledWithExactly(
-                    console.log, sinon.match.string, test.referencePath, diffInPercent
-                ));
+                .then(() => assert.calledWithMatch(console.log,
+                    `${referencePath} has been updated (compressed on: 50%)`));
         });
     });
 
